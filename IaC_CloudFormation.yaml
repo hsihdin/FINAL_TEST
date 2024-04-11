@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation template for FInal Test.
+
+Parameters:
+  LaunchTemplateId:
+    Type: String
+    Description: ID of the Launch Template
+
+Resources:
+  # VPC and Subnets
+  adiyodi_final_test:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+
+  adiyodi_final_testPublicSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref adiyodi_final_test
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PublicSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref adiyodi_final_test
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref adiyodi_final_test
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+
+  PrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref adiyodi_final_test
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+
+  # Internet Gateway and Route Table
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref adiyodi_final_test
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref adiyodi_final_test
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Route Table Associations
+  adiyodi_final_testPublicSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref adiyodi_final_testPublicSubnetOne
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetTwo
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref adiyodi_final_test
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # Nat Gateway
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref adiyodi_final_testPublicSubnetOne
+
+  # Security Groups
+  adiyodi_final_testPublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic from the internet
+      VpcId: !Ref adiyodi_final_test
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # Allowing SSH access from anywhere
+
+  adiyodi_final_testPrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic from ALB
+      VpcId: !Ref adiyodi_final_test
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref adiyodi_final_testPublicSecurityGroup
+
+  # ALB, Target Group, and Listener
+  adiyodi_final_testALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: adiyodi_final_testALB
+      Scheme: internet-facing
+      Subnets:
+        - !Ref adiyodi_final_testPublicSubnetOne
+        - !Ref PublicSubnetTwo
+      SecurityGroups:
+        - !Ref adiyodi_final_testPublicSecurityGroup
+      Type: application
+
+  adiyodi_final_testTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: adiyodi_final_testTargetGroup
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref adiyodi_final_test
+      TargetType: instance
+
+  adiyodi_final_testListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref adiyodi_final_testTargetGroup
+      LoadBalancerArn: !Ref adiyodi_final_testALB
+      Port: 80
+      Protocol: HTTP
+
+  # EC2 Instance
+  goldenEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: ami-019f9b3318b7155c5
+      KeyName: vokey
+      SecurityGroupIds:
+        - !Ref adiyodi_final_testPublicSecurityGroup
+      SubnetId: !Ref adiyodi_final_testPublicSubnetOne
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo yum update -y
+          sudo yum install -y httpd php
+          sudo systemctl start httpd
+          sudo systemctl enable httpd
+          sudo echo "<?php phpinfo(); ?>" > /var/www/html/index.php
+          # Allow SSH access
+          sudo yum install -y openssh-server
+          sudo systemctl start sshd
+          sudo systemctl enable sshd
+
+  # Launch Template and Auto Scaling Group
+  adiyodi_final_testLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: ApacheLaunchTemplate
+      LaunchTemplateData:
+        ImageId: ami-019f9b3318b7155c5
+        InstanceType: t2.micro
+        KeyName: vokey
+        SecurityGroupIds:
+          - !Ref adiyodi_final_testPrivateSecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo yum update -y
+            sudo yum install -y httpd php
+            sudo systemctl start httpd
+            sudo systemctl enable httpd
+            sudo echo "<?php phpinfo(); ?>" > /var/www/html/index.php
+            # Allow SSH access
+            sudo yum install -y openssh-server
+            sudo systemctl start sshd
+            sudo systemctl enable sshd
+
+  adiyodi_final_testASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: adiyodi_final_testASG
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: "2"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref adiyodi_final_testLaunchTemplate
+        Version: !GetAtt adiyodi_final_testLaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref adiyodi_final_testTargetGroup
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetOne
+        - !Ref PrivateSubnetTwo
+
+Outputs:
+  adiyodi_final_testPublicSubnetOneId:
+    Description: Public subnet one ID
+    Value: !Ref adiyodi_final_testPublicSubnetOne
+
+  PublicSubnetTwoId:
+    Description: Public subnet two ID
+    Value: !Ref PublicSubnetTwo
+
+  PrivateSubnetOneId:
+    Description: Private subnet one ID
+    Value: !Ref PrivateSubnetOne
+
+  ALBARN:
+    Description: The ARN of the ALB
+    Value: !Ref adiyodi_final_testALB
+
+  TargetGroupARN:
+    Description: The ARN of the Target Group
+    Value: !Ref adiyodi_final_testTargetGroup
+
+  AutoScalingGroupName:
+    Description: The name of the Auto Scaling Group
+    Value: !Ref adiyodi_final_testASG
